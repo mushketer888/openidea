@@ -16,6 +16,8 @@
 //! projects) and folders linked with `openidea-plugin link` (`links.json`).
 
 mod api;
+pub mod commit;
+mod hover;
 mod icon_extensions;
 mod icon_patterns;
 mod icon_settings;
@@ -30,6 +32,7 @@ mod providers;
 pub mod remote;
 pub mod remote_host;
 mod run_detectors;
+mod semantic_tokens;
 mod theme;
 mod types;
 pub mod ui_points;
@@ -37,6 +40,7 @@ pub mod views;
 pub mod web;
 
 pub use api::{FileSecretStore, HostWorkspace, PluginWorkspace, SecretStore};
+pub(crate) use hover::merge as merge_hover;
 pub use icons::{
     MAX_PLUGIN_ICON, map_asset as icon_theme_map_asset, plugin_icon, sanitize_svg, svg_prefix as icon_theme_svg_prefix,
 };
@@ -47,6 +51,7 @@ pub use market::{
 pub use points::{COMMANDS, CommandDecl, register_builtin_points};
 pub use providers::{ProviderKind, set_editor_providers};
 pub(crate) use providers::{editor_plugin_host, editor_providers as editor_providers_for};
+pub(crate) use semantic_tokens::merge as merge_semantic_tokens;
 pub use theme::{ThemeDef, ThemeKind};
 pub use types::*;
 
@@ -59,7 +64,8 @@ use ide_extension::{
 use ide_language::plugin_point::PluginLanguages;
 use ide_language::{LanguageConfig, ProgramPin};
 use ide_plugin::{
-    Actor, ActorError, CANCELLED, CallError, HostApi, Invocation, Limits, PluginEngine, Runtime, RuntimeSetup,
+    Actor, ActorError, CANCELLED, CallError, HostApi, HostError, Invocation, Limits, PluginEngine, Runtime,
+    RuntimeSetup,
 };
 use parking_lot::{Condvar, Mutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -1074,11 +1080,84 @@ impl PluginHost {
         })
     }
 
+    /// The Services pane of node `key` of the plugin's `location = "services"`
+    /// view `view`.
+    pub fn service_detail(
+        &self,
+        id: &str,
+        view: &str,
+        key: &str,
+        invocation: Invocation,
+    ) -> IdeResult<Vec<ide_plugin::ServiceTab>> {
+        self.services_view(id, view)?;
+        let (view, key) = (view.to_owned(), key.to_owned());
+        self.code_call(id, invocation, "rendering the service's pane", move |rt, inv| {
+            rt.service_detail(&view, &key, inv)
+        })
+    }
+
+    /// Runs the program of the log tab `tab` of node `key`'s pane, with the
+    /// arguments of the toggles in `on`, streaming its output until it exits
+    /// or `cancel` fires; returns its exit code. The pane is asked of the
+    /// plugin again, so the UI never names what runs. Needs the plugin's
+    /// `process:<program>` grant.
+    #[allow(clippy::too_many_arguments)]
+    pub fn stream_service_log(
+        &self,
+        id: &str,
+        view: &str,
+        key: &str,
+        tab: &str,
+        on: &[String],
+        invocation: Invocation,
+        cancel: &ide_core::CancellationToken,
+        on_line: &dyn Fn(PluginOutputLine),
+    ) -> IdeResult<Option<i32>> {
+        if cancel.is_cancelled() {
+            return Err(IdeError::cancelled());
+        }
+        let cwd = invocation.workspace_root.clone();
+        let tabs = self.service_detail(id, view, key, invocation)?;
+        let Some(ide_plugin::ServicePane::Log(log)) = tabs.into_iter().find(|t| t.id == tab).map(|t| t.body) else {
+            return Err(IdeError::not_found(format!("the pane of {key:?} has no log tab {tab:?}")));
+        };
+        let toggled = log.toggles.into_iter().filter(|t| on.contains(&t.id)).flat_map(|t| t.args);
+        let args: Vec<String> = log.args.into_iter().chain(toggled).collect();
+        let plugin =
+            self.plugins.read().get(id).cloned().ok_or_else(|| IdeError::not_found(format!("plugin {id:?}")))?;
+        let cap = Capability::Process(log.program.clone());
+        if !plugin.meta.lock().granted.iter().any(|g| g.covers(&cap)) {
+            let denied = HostError::Denied(cap.to_string()).to_string();
+            return Err(IdeError::new(ide_core::error::ErrorKind::PermissionDenied, denied));
+        }
+        let api = api::PluginApi { pkg: plugin.pkg.clone(), shared: self.shared.clone() };
+        api.stream_process(&log.program, args, cwd.as_deref(), cancel, on_line).map_err(|e| match e {
+            HostError::Cancelled => IdeError::cancelled(),
+            e @ HostError::Denied(_) => IdeError::new(ide_core::error::ErrorKind::PermissionDenied, e.to_string()),
+            HostError::NotFound(m) => IdeError::not_found(m),
+            HostError::Invalid(m) => IdeError::invalid(m),
+            e => IdeError::unavailable(e.to_string()),
+        })
+    }
+
     fn declared_view(&self, id: &str, view: &str) -> IdeResult<()> {
         let declared = [ui_points::VIEWS, ui_points::CUSTOM_EDITORS]
             .iter()
             .any(|point| self.ui.items(point, Some(id)).iter().any(|i| i.key == view));
         if declared { Ok(()) } else { Err(IdeError::not_found(format!("plugin {id:?} declares no view {view:?}"))) }
+    }
+
+    fn services_view(&self, id: &str, view: &str) -> IdeResult<()> {
+        let services = self
+            .ui
+            .items(ui_points::VIEWS, Some(id))
+            .iter()
+            .any(|i| i.key == view && i.decl["location"].as_str() == Some(ui_points::SERVICES_LOCATION));
+        if services {
+            Ok(())
+        } else {
+            Err(IdeError::not_found(format!("plugin {id:?} declares no services view {view:?}")))
+        }
     }
 
     /// One call into a plugin's code for the UI: checks it may run (asking
@@ -1286,6 +1365,67 @@ impl PluginHost {
     /// (`PromptRequested`); false when it is no longer waiting.
     pub fn answer_prompt(&self, prompt_id: &str, answer: Option<Vec<String>>) -> bool {
         prompt_id.parse().is_ok_and(|id| self.shared.answer_prompt(id, answer))
+    }
+
+    /// A window answered a plugin's `CommitRequested`; false when the call no
+    /// longer waits.
+    pub fn answer_commit(&self, request_id: &str, answer: CommitAnswer) -> bool {
+        request_id.parse().is_ok_and(|id| self.shared.answer_commit(id, answer))
+    }
+
+    /// Runs the plugins' before-commit checks `checks` (`(plugin, check)`) on
+    /// what `selection` commits. A check that fails or isn't available is
+    /// reported with `error`, so the commit still stops for it.
+    pub fn commit_checks(
+        &self,
+        invocation: Invocation,
+        selection: CommitSelection,
+        checks: Vec<PluginCommitCheckRef>,
+        cancel: &ide_core::CancellationToken,
+    ) -> IdeResult<Vec<PluginCommitCheckResult>> {
+        let declared = self.ui.items(ui_points::COMMIT_CHECKS, None);
+        let wanted: Vec<_> = checks
+            .into_iter()
+            .filter_map(|c| {
+                let item = declared.iter().find(|i| i.plugin_id == c.plugin_id && i.key == c.check)?;
+                Some((c, item.decl["title"].as_str().unwrap_or_default().to_owned()))
+            })
+            .collect();
+        if wanted.is_empty() {
+            return Ok(Vec::new());
+        }
+        let workspace = self.shared.workspace().ok_or_else(|| IdeError::unavailable("no workspace"))?;
+        let draft = api::commit_draft(&*workspace, selection, cancel).map_err(|e| match e {
+            HostError::Cancelled => IdeError::cancelled(),
+            HostError::Invalid(m) => IdeError::invalid(m),
+            e => IdeError::unavailable(e.to_string()),
+        })?;
+        let mut out = Vec::new();
+        for (c, title) in wanted {
+            if cancel.is_cancelled() {
+                return Err(IdeError::cancelled());
+            }
+            let granted = self
+                .plugins
+                .read()
+                .get(&c.plugin_id)
+                .is_some_and(|p| p.meta.lock().granted.contains(&Capability::VcsRead));
+            let result = if granted {
+                let (check, draft) = (c.check.clone(), draft.clone());
+                self.code_call(&c.plugin_id, invocation.clone(), "checking the commit", move |rt, inv| {
+                    rt.commit_check(&check, draft.clone(), inv)
+                })
+                .map_err(|e| e.message)
+            } else {
+                Err(HostError::Denied(Capability::VcsRead.to_string()).to_string())
+            };
+            let (problems, error) = match result {
+                Ok(problems) => (problems, None),
+                Err(e) => (Vec::new(), Some(e)),
+            };
+            out.push(PluginCommitCheckResult { plugin_id: c.plugin_id, check: c.check, title, problems, error });
+        }
+        Ok(out)
     }
 
     /// Kinds of workbench events some running or activatable plugin wants;

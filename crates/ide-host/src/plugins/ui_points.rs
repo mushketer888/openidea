@@ -5,7 +5,7 @@
 //!
 //! ```toml
 //! [[contributes.menus]]
-//! menu = "editor.context"          # projectView.context, editorTab.context, tools, viewItem.context
+//! menu = "editor.context"          # projectView.context, editorTab.context, tools, viewItem.context, commit.message
 //! command = "check"
 //! when = "editorLang == java"
 //! # view = "<view id>"             # required for (only allowed on) viewItem.context
@@ -26,7 +26,7 @@
 //! id = "jobs"
 //! title = "Jobs"
 //! icon = "server"
-//! location = "right"               # left, right, bottom
+//! location = "right"               # left, right, bottom, services (nodes of the Services tool window)
 //!
 //! [[contributes.customEditors]]
 //! id = "table"
@@ -42,6 +42,10 @@
 //! icon = "icons/drawing.svg"
 //! iconDark = "icons/drawing_dark.svg"
 //!
+//! [[contributes.commitChecks]]
+//! id = "conventional"
+//! title = "Conventional Commits"   # Commit Options › Before Commit; `commit-checker.check` runs it
+//!
 //! [[contributes.fileTemplates]]
 //! id = "drawing"
 //! name = "Excalidraw Drawing"
@@ -55,6 +59,9 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+/// A view whose tree shows in the Services tool window; the plugin's
+/// `service-provider` renders the selected node's pane.
+pub const SERVICES_LOCATION: &str = "services";
 pub const MENUS: &str = "menus";
 pub const KEYMAPS: &str = "keymaps";
 pub const STATUS_BAR: &str = "statusBar";
@@ -63,9 +70,13 @@ pub const VIEWS: &str = "views";
 pub const CUSTOM_EDITORS: &str = "customEditors";
 pub const FILE_ICONS: &str = "fileIcons";
 pub const FILE_TEMPLATES: &str = "fileTemplates";
+pub const COMMIT_CHECKS: &str = "commitChecks";
 
 const VIEW_ITEM_MENU: &str = "viewItem.context";
-const MENU_IDS: [&str; 5] = ["editor.context", "projectView.context", "editorTab.context", "tools", VIEW_ITEM_MENU];
+/// The toolbar above the commit message (Commit tool window and dialog).
+const COMMIT_MESSAGE_MENU: &str = "commit.message";
+const MENU_IDS: [&str; 6] =
+    ["editor.context", "projectView.context", "editorTab.context", "tools", VIEW_ITEM_MENU, COMMIT_MESSAGE_MENU];
 const MAX_TITLE: usize = 256;
 const MAX_SETTINGS: usize = 200;
 const MAX_PATTERNS: usize = 16;
@@ -119,6 +130,9 @@ pub(super) fn menu(pkg: &Package, decl: toml::Value) -> Result<UiDecl, String> {
         return Err(format!("contributes.menus: unknown menu {:?} (one of {})", d.menu, MENU_IDS.join(", ")));
     }
     declared_command(pkg, MENUS, &d.command)?;
+    if d.menu == COMMIT_MESSAGE_MENU {
+        pkg.manifest.needs_api(&format!("contributes.menus: {COMMIT_MESSAGE_MENU}"), 3)?;
+    }
     if let Some(w) = &d.when {
         validate_when(w).map_err(|e| format!("contributes.menus: {e}"))?;
     }
@@ -395,8 +409,14 @@ pub(super) fn view(pkg: &Package, decl: toml::Value) -> Result<UiDecl, String> {
     validate_item_id(&d.id, "view id")?;
     title(VIEWS, &d.title)?;
     let files = web_or_code(pkg, d.web.as_deref(), &format!("view {:?}", d.id))?;
-    if !["left", "right", "bottom"].contains(&d.location.as_str()) {
-        return Err(format!("view {:?}: `location` is left, right or bottom", d.id));
+    if !["left", "right", "bottom", SERVICES_LOCATION].contains(&d.location.as_str()) {
+        return Err(format!("view {:?}: `location` is left, right, bottom or services", d.id));
+    }
+    if d.location == SERVICES_LOCATION {
+        pkg.manifest.needs_api(&format!("view {:?}: `location = \"services\"`", d.id), 3)?;
+        if d.web.is_some() {
+            return Err(format!("view {:?}: a services view is rendered by the plugin's code (no `web`)", d.id));
+        }
     }
     if d.icon.as_ref().is_some_and(|i| i.len() > 64) {
         return Err(format!("view {:?}: icon names are up to 64 bytes", d.id));
@@ -543,6 +563,29 @@ pub(super) fn file_template(pkg: &Package, decl: toml::Value) -> Result<UiDecl, 
     let mut out = UiDecl::new(d.id.clone(), d.name.clone(), json);
     out.files = vec![d.path.clone()];
     Ok(out)
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CommitCheckDecl {
+    id: String,
+    title: String,
+}
+
+/// `[[contributes.commitChecks]]`: a before-commit check run by the plugin's
+/// `commit-checker` export, listed in Commit Options.
+pub(super) fn commit_check(pkg: &Package, decl: toml::Value) -> Result<UiDecl, String> {
+    let d: CommitCheckDecl = decode(COMMIT_CHECKS, decl)?;
+    pkg.manifest.needs_api(&format!("contributes.{COMMIT_CHECKS}"), 3)?;
+    validate_item_id(&d.id, "commit check id")?;
+    title(COMMIT_CHECKS, &d.title)?;
+    if pkg.manifest.wasm.is_none() {
+        return Err(format!("contributes.{COMMIT_CHECKS}: needs `wasm` (the checks run in the plugin's code)"));
+    }
+    if !pkg.manifest.capabilities.all().any(|c| *c == ide_extension::Capability::VcsRead) {
+        return Err(format!("contributes.{COMMIT_CHECKS}: needs the `vcs.read` capability (checks read the commit)"));
+    }
+    Ok(UiDecl::new(d.id.clone(), d.title.clone(), json(&d)?))
 }
 
 #[cfg(test)]

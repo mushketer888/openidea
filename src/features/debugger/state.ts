@@ -25,6 +25,7 @@ import {
 } from "@/platform/ipc";
 import { confirmTerminate } from "@/workbench/confirmTerminate";
 import { maybeEditorService, notifications, toolWindowService, useDebugRunSessions } from "@/workbench/contributions";
+import { startedPort } from "@/features/run/serverPort";
 import { breakpointsOf, consumeTemporary, flushBreakpoints, refreshStates, resetStatuses } from "./breakpoints/store";
 import { interpolateLog, logParts, suspends } from "./breakpoints/model";
 import { syncSpecial, useSpecialBreakpoints } from "./breakpoints/special";
@@ -33,7 +34,7 @@ import { flashTaskbarForBreakpoint, stopTaskbarFlash } from "./taskbarFlash";
 import { missingAdapter } from "./missingAdapter";
 import { startFailureMessage } from "./startFailure";
 
-export type SessionStatus = "starting" | "running" | "paused" | "terminated";
+export type SessionStatus = "starting" | "running" | "paused" | "stopping" | "terminated";
 
 export interface DebugSession {
   id: DebugSessionId;
@@ -305,6 +306,7 @@ export function publishContext() {
           startedAt: session.startedAt ?? 0,
           status: paused ? ("paused" as const) : session.status,
           processId: session.process,
+          httpPort: sessionHttpPort(session.id),
           rerun: session.runConfig || session.launch ? () => void rerunSession(session.id) : null,
           stop: (options?: { stopProcess?: boolean }) => stopSession(session.id, options),
           show: () => {
@@ -326,6 +328,7 @@ export function publishContext() {
           configId: session.runConfig?.id ?? null,
           name: session.runConfig?.name ?? session.name,
           startedAt: session.startedAt ?? 0,
+          status: session.status,
           paused: !!paused,
           rerun: session.runConfig || session.launch ? () => void rerunSession(session.id) : null,
           stop: () => void stopSession(session.id),
@@ -351,6 +354,30 @@ export function publishContext() {
 
 // --- console -----------------------------------------------------------------
 
+/**
+ * The HTTP port the session's application announced on its console ("Tomcat started on
+ * port 8080"), the same embedded web server line the Run console is parsed for. Kept per
+ * session, so the Services node keeps the port after the line scrolls out of the buffer.
+ */
+const announcedPorts = new Map<DebugSessionId, number>();
+
+export function sessionHttpPort(id: DebugSessionId): number | undefined {
+  let port: number | undefined;
+  for (const line of useDebug.getState().console[id] ?? []) {
+    const found = startedPort(line.text);
+    if (found !== null) port = found;
+  }
+  if (port !== undefined) announcedPorts.set(id, port);
+  else port = announcedPorts.get(id);
+  return port;
+}
+
+/** Republishes Services metadata only when a console announced a port it had not shown yet. */
+function republishForPorts() {
+  const published = useDebugRunSessions.getState().serviceSessions;
+  if (published.some((d) => d.httpPort !== sessionHttpPort(d.id))) publishContext();
+}
+
 export function appendConsole(session: DebugSessionId, category: string, raw: string) {
   if (!raw) return;
   flushConsoleOutput();
@@ -364,6 +391,7 @@ export function appendConsole(session: DebugSessionId, category: string, raw: st
     trimConsole(next);
     return { console: { ...s.console, [session]: next } };
   });
+  republishForPorts();
 }
 
 /**
@@ -406,6 +434,7 @@ function flushConsoleOutput() {
     }
     return { console: consoleBySession };
   });
+  republishForPorts();
 }
 
 /** Split styled output at real line breaks, retaining partial lines across events. */
@@ -634,6 +663,12 @@ export async function stopSession(id: DebugSessionId, options: { stopProcess?: b
     appendConsole(root.id, "system", tx("Launch cancelled.") + "\n");
     markTerminated(root.id);
     return;
+  }
+  // Between the Stop press and the adapter's terminated event the session is shutting down:
+  // keep it live (Run stays disabled) and let the toolbar show the spinner.
+  for (const sid of new Set([root.id, s.id])) {
+    const target = useDebug.getState().sessions[sid];
+    if (target && isLive(target)) patch(sid, { status: "stopping" });
   }
   try {
     await call(commands.debugStop(root.id));
@@ -1078,6 +1113,7 @@ export function resetSessions() {
   pendingOutput.length = 0;
   cancelOutputFlush();
   ansiStreams.clear();
+  announcedPorts.clear();
   useDebug.setState({ sessions: {}, active: null, console: {}, stopSeq: 0 });
   useExecutionPoint.setState({ path: null, line: 0, top: true, values: {}, variables: {} });
   publishContext();

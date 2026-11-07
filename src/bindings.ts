@@ -155,6 +155,8 @@ export const commands = {
 	agentProbe: (provider: string, refresh: boolean) => typedError<AgentProbe, IdeError>(__TAURI_INVOKE("agent_probe", { provider, refresh })),
 	/**  Stops the task's current turn, or with `subagent` only that subagent's work. */
 	agentCancel: (task: string, subagent: string | null) => typedError<null, IdeError>(__TAURI_INVOKE("agent_cancel", { task, subagent })),
+	/**  Stops one of the task's background tasks. */
+	agentStopBackground: (task: string, background: string) => typedError<null, IdeError>(__TAURI_INVOKE("agent_stop_background", { task, background })),
 	/**  Answers a permission request; `option: null` cancels it. */
 	agentRespond: (task: string, permission: number, option: string | null) => typedError<null, IdeError>(__TAURI_INVOKE("agent_respond", { task, permission, option })),
 	agentArchive: (task: string) => typedError<null, IdeError>(__TAURI_INVOKE("agent_archive", { task })),
@@ -532,7 +534,7 @@ export const commands = {
 	/**  "Restore" of the tag-deleted notification. */
 	vcsRestoreTag: (repo: string | null, deleted: DeletedTag) => typedError<null, IdeError>(__TAURI_INVOKE("vcs_restore_tag", { repo, deleted })),
 	/**  New Branch: creates `name` at `start` (HEAD when absent), optionally checking it out. */
-	vcsCreateBranch: (repo: string | null, name: string, start: string | null, checkout: boolean) => typedError<null, IdeError>(__TAURI_INVOKE("vcs_create_branch", { repo, name, start, checkout })),
+	vcsCreateBranch: (repo: string | null, name: string, start: string | null, checkout: boolean, overwrite: boolean | null) => typedError<null, IdeError>(__TAURI_INVOKE("vcs_create_branch", { repo, name, start, checkout, overwrite })),
 	/**
 	 *  Undo Commit: moves HEAD back to the commit's parent, keeping its changes staged.
 	 *  Returns the undone commit's message.
@@ -729,6 +731,23 @@ export const commands = {
 	 */
 	mavenExcludeDependency: (pom: string, dependency: ArtifactKey, exclusion: ArtifactKey) => typedError<Location, IdeError>(__TAURI_INVOKE("maven_exclude_dependency", { pom, dependency, exclusion })),
 	/**
+	 *  The go-to-declaration target at `pos` of a Maven POM: the definition of the
+	 *  `${property}` at the caret, or the `<dependencyManagement>` / `<pluginManagement>`
+	 *  entry providing the dependency's / plugin's version, along the parent chain.
+	 */
+	mavenGotoDeclaration: (pom: string, pos: Pos) => typedError<{
+	/**
+	 *  Absolute path of the file with the declaration: the POM itself, or a parent
+	 *  POM of the local repository when the definition is inherited from one.
+	 */
+	path: string,
+	range: Range,
+	/**  What was found. */
+	kind: PomGotoKind,
+	/**  The declaration as named for the user (`example.version`, `com.example:example-lib`). */
+	label: string,
+} | null, IdeError>(__TAURI_INVOKE("maven_goto_declaration", { pom, pos })),
+	/**
 	 *  Build › Build Project / Rebuild Project / Build Module (`file`: a file or folder of the
 	 *  module) / Build Artifacts, streaming the console and messages on `on_event`; cancellable
 	 *  with `cancel_request(request)`. Diagnostics of `clear` (the files of the previous build)
@@ -818,8 +837,8 @@ export const commands = {
 	sdkProjectLibraries: () => typedError<LibraryGroup[], IdeError>(__TAURI_INVOKE("sdk_project_libraries")),
 	/**  Looks up `names` (bare command names): `node_modules/.bin` above `near`, then the search path. */
 	sdkLocateTools: (names: string[], near: string | null) => typedError<LocatedTools, IdeError>(__TAURI_INVOKE("sdk_locate_tools", { names, near })),
-	/**  `base -m venv location`; output lines stream through `on_output`. */
-	sdkPythonCreateVenv: (base: string, location: string, request: RequestId, onOutput: Channel<string>) => typedError<Sdk, IdeError>(__TAURI_INVOKE("sdk_python_create_venv", { base, location, request, onOutput })),
+	/**  Creates a Python environment with `tool` (`venv` / `uv` / `poetry`); output streams through `on_output`. */
+	sdkPythonCreateVenv: (tool: VenvTool, base: string, location: string, request: RequestId, onOutput: Channel<string>) => typedError<Sdk, IdeError>(__TAURI_INVOKE("sdk_python_create_venv", { tool, base, location, request, onOutput })),
 	sdkPythonPackages: (python: string, request: RequestId) => typedError<PythonPackage[], IdeError>(__TAURI_INVOKE("sdk_python_packages", { python, request })),
 	/**  Installs (`uninstall = false`) or removes a package; output streams through `on_output`. */
 	sdkPythonPip: (python: string, requirement: string, uninstall: boolean, upgrade: boolean, request: RequestId, onOutput: Channel<string>) => typedError<null, IdeError>(__TAURI_INVOKE("sdk_python_pip", { python, requirement, uninstall, upgrade, request, onOutput })),
@@ -903,6 +922,8 @@ export const commands = {
 	positions?: FilePosition[],
 	/**  Comparison windows: the revisions to compare (boxed: most launches have none). */
 	comparison?: ComparisonLaunch | null,
+	/**  `openidea diff a.txt b.txt`: the two files to open in the diff viewer (boxed: most launches have none). */
+	diff?: DiffFilesLaunch | null,
 	/**  Deployment windows: the server and local selection to compare. */
 	deployment?: DeploymentLaunch | null,
 } | null>("window_take_launch"),
@@ -1052,6 +1073,16 @@ export const commands = {
 	 */
 	pluginAnswerPrompt: (promptId: string, answer: string[] | null) => __TAURI_INVOKE<boolean>("plugin_answer_prompt", { promptId, answer }),
 	/**
+	 *  A window's answer to a plugin's `commitRequested`; false when the call no
+	 *  longer waits.
+	 */
+	pluginAnswerCommit: (requestId: string, answer: CommitAnswer) => __TAURI_INVOKE<boolean>("plugin_answer_commit", { requestId, answer }),
+	/**
+	 *  Runs plugins' before-commit checks on what `selection` commits, until
+	 *  `request` is cancelled.
+	 */
+	pluginCommitChecks: (selection: CommitSelection, checks: PluginCommitCheckRef[], request: RequestId) => typedError<PluginCommitCheckResult[], IdeError>(__TAURI_INVOKE("plugin_commit_checks", { selection, checks, request })),
+	/**
 	 *  Content of a plugin view (`doc`: the document of a custom editor; `editor`: for
 	 *  a tool window, the window's active editor, as commands get it).
 	 */
@@ -1069,6 +1100,14 @@ export const commands = {
 	language: string,
 	selections: Range[],
 } | null) => typedError<null, IdeError>(__TAURI_INVOKE("plugin_view_event", { pluginId, view, event, doc, editor })),
+	/**  The Services pane of node `key` of a plugin's `location = "services"` view. */
+	pluginServiceDetail: (pluginId: string, view: string, key: string) => typedError<ServiceTab[], IdeError>(__TAURI_INVOKE("plugin_service_detail", { pluginId, view, key })),
+	/**
+	 *  Runs the program of the log tab `tab` of node `key`'s Services pane (with
+	 *  the toggles in `on`), streaming its output until it exits or `request` is
+	 *  cancelled; returns the exit code.
+	 */
+	pluginServiceLog: (request: RequestId, pluginId: string, view: string, key: string, tab: string, on: string[], onLine: Channel<PluginOutputLine>) => typedError<number | null, IdeError>(__TAURI_INVOKE("plugin_service_log", { request, pluginId, view, key, tab, on, onLine })),
 	/**  The page of a plugin's web view or custom editor (`web = …`). */
 	pluginWebPage: (pluginId: string, view: string) => typedError<WebPage, IdeError>(__TAURI_INVOKE("plugin_web_page", { pluginId, view })),
 	/**
@@ -1360,6 +1399,16 @@ export type ActiveTheme = {
 	theme: ThemeDef,
 };
 
+/**  A task the agent runs in the background while the conversation goes on. */
+export type AgentBackgroundTask = {
+	id: string,
+	/**  What it is, as the agent names it (`local_bash`, `local_agent`, `monitor`…). */
+	kind: string,
+	description: string,
+	/**  When the client first saw it (ms since the epoch). */
+	startedMs: number | null,
+};
+
 /**
  *  What a task's agent can do beyond a plain conversation, as it reported when its
  *  session started.
@@ -1373,6 +1422,8 @@ export type AgentCapabilities = {
 	rollback?: boolean,
 	/**  A message can join the running turn instead of waiting for it. */
 	steer?: boolean,
+	/**  It reports its background tasks and stops them one by one. */
+	backgroundTasks?: boolean,
 };
 
 /**  A file the task changed, relative to [`AgentTask::base_commit`]. */
@@ -1469,6 +1520,11 @@ endedMs: number | null;
 cancellable: boolean } | 
 /**  A message between sessions in a subagent's conversation: its task (`incoming`) or its report. */
 { type: "message"; incoming: boolean; text: string } | { type: "permission"; id: number; title: string; options: AgentPermissionOption[]; 
+/**
+ *  Set when the request asks `AskUserQuestion`'s questions; answered with a JSON object
+ *  of question to answer instead of an option.
+ */
+questions?: AgentQuestion[]; 
 /**  Name of the chosen option, or `None` while pending. Cancelled requests read "Cancelled". */
 chosen: string | null } | { type: "error"; message: string };
 
@@ -1563,6 +1619,20 @@ export type AgentProvider = {
 	/**  Slash commands it offered last time. */
 	commands: AgentCommand[],
 	source: AgentSource,
+};
+
+/**  A question the agent asks with `AskUserQuestion`, answered by picking options or typing. */
+export type AgentQuestion = {
+	header?: string,
+	question: string,
+	multiSelect?: boolean,
+	options: AgentQuestionOption[],
+};
+
+export type AgentQuestionOption = {
+	label: string,
+	description?: string,
+	preview?: string | null,
 };
 
 export type AgentQueued = {
@@ -1663,6 +1733,8 @@ export type AgentTask = {
 	 *  by its next output or any status change.
 	 */
 	retry?: AgentRetry | null,
+	/**  What the agent runs in the background (shells, subagents, monitors), oldest first. */
+	background?: AgentBackgroundTask[],
 };
 
 export type AgentToolDiff = {
@@ -1760,6 +1832,8 @@ export type AppearanceSettings = {
 	redGreenVision?: boolean,
 	differentToolWindowBackground?: boolean,
 	compactMode?: boolean,
+	/**  IDEA "Use smaller indents in trees": tool window trees indent less per level. */
+	smallTreeIndents?: boolean,
 	fullPathInTitle?: boolean,
 	projectColorsInToolbar?: boolean,
 	dndWithAltOnly?: boolean,
@@ -2256,6 +2330,15 @@ export type CommandForm = {
 
 export type Commit = Commit_Serialize | Commit_Deserialize;
 
+/**  A window's answer to a [`CommitRequest`]. */
+export type CommitAnswer = 
+/**  The window's project has no repository. */
+{ kind: "noRepository" } | { kind: "selection"; selection: CommitSelection } | 
+/**  The message was replaced. */
+{ kind: "done" } | 
+/**  The draft is no longer at the revision. */
+{ kind: "stale" };
+
 /**  Commit Options (IDEA's commit options popup). */
 export type CommitOptions = {
 	amend: boolean,
@@ -2274,6 +2357,41 @@ export type CommitOptions = {
 	stage?: IpcPath[],
 	/**  Staged files left out of the commit; they stay staged afterwards. */
 	exclude?: IpcPath[],
+};
+
+/**  A problem a plugin's before-commit check reported (WIT `commit-checker.commit-problem`). */
+export type CommitProblem = {
+	message: string,
+	/**  Absolute path of the file it is in, if any (IPC form). */
+	path: string | null,
+	range: Range | null,
+};
+
+/**  What a plugin asks of a window's Commit view. */
+export type CommitRequest = 
+/**
+ *  What Commit would commit now ([`CommitAnswer::Selection`]); unsaved
+ *  editors of the included files are saved first.
+ */
+{ kind: "selection" } | 
+/**  Replace the message if the draft is still at `revision`. */
+{ kind: "setMessage"; revision: number; message: string };
+
+/**
+ *  What a window's Commit view would commit: per repository, the options
+ *  `vcs_commit` would get.
+ */
+export type CommitSelection = {
+	/**  Changes whenever the message, the included changes or Amend do. */
+	revision: number,
+	message: string,
+	amend: boolean,
+	repositories: CommitSelectionRepo[],
+};
+
+export type CommitSelectionRepo = {
+	root: IpcPath,
+	options: CommitOptions,
 };
 
 /**  Version Control › Commit: commit checks and commit-message inspections. */
@@ -2297,6 +2415,8 @@ export type CommitSettings = {
 	bodyLimit?: number,
 	showRightMargin?: boolean,
 	wrapAtMargin?: boolean,
+	/**  Plugin before-commit checks turned off (`<plugin id>/<check id>`); the rest run. */
+	disabledPluginChecks?: string[],
 };
 
 export type Commit_Deserialize = {
@@ -3073,6 +3193,12 @@ export type Diagnostic = {
 	 *  is what the producer calls itself. Inspection profiles key on this.
 	 */
 	server?: string | null,
+};
+
+/**  The two files of a command-line diff (`openidea diff a.txt b.txt`), both sides editable. */
+export type DiffFilesLaunch = {
+	left: IpcPath,
+	right: IpcPath,
 };
 
 export type DirectoryCompareEntry = {
@@ -4965,6 +5091,8 @@ export type Launch = {
 	positions?: FilePosition[],
 	/**  Comparison windows: the revisions to compare (boxed: most launches have none). */
 	comparison?: ComparisonLaunch | null,
+	/**  `openidea diff a.txt b.txt`: the two files to open in the diff viewer (boxed: most launches have none). */
+	diff?: DiffFilesLaunch | null,
 	/**  Deployment windows: the server and local selection to compare. */
 	deployment?: DeploymentLaunch | null,
 };
@@ -5347,6 +5475,11 @@ export type MavenSettings = {
 	 *  `mvnd` on `PATH` / common install dirs. Only used when `daemon` is on.
 	 */
 	mvndHome?: string,
+	/**
+	 *  Thread count of Maven builds (`-T`): a number of threads (`4`) or a core
+	 *  multiplier (`2C`, `2.5C`); empty = Maven's default (one thread per module).
+	 */
+	threads?: string,
 };
 
 export type MemoryCategory = 
@@ -5694,6 +5827,23 @@ export type PickItem = {
 	description: string | null,
 };
 
+/**  A plugin's before-commit check to run (`[[contributes.commitChecks]]`). */
+export type PluginCommitCheckRef = {
+	pluginId: string,
+	check: string,
+};
+
+/**  What a plugin's before-commit check found. */
+export type PluginCommitCheckResult = {
+	pluginId: string,
+	check: string,
+	/**  The check's declared title. */
+	title: string,
+	problems: CommitProblem[],
+	/**  The check could not run (the plugin failed, timed out or lacks `vcs.read`). */
+	error: string | null,
+};
+
 /**  A plugin's context key for `when` clauses (`value` is JSON text). */
 export type PluginContextKey = {
 	pluginId: string,
@@ -5761,7 +5911,12 @@ export type PluginEvent =
 /**  The call that asked gave up (cancelled, or its plugin stopped): close the prompt. */
 { type: "promptClosed"; promptId: string } | 
 /**  Bring the tool window of the plugin's view `view` to the front. */
-{ type: "revealView"; pluginId: string; view: string };
+{ type: "revealView"; pluginId: string; view: string } | 
+/**
+ *  A command needs the window's Commit view: answer with
+ *  `plugin_answer_commit(request_id, …)`. Closed like a prompt (`PromptClosed`).
+ */
+{ type: "commitRequested"; pluginId: string; requestId: string; request: CommitRequest };
 
 /**  A plugin's own icon (`icon`, `icon-dark` of its manifest): sanitised SVG markup. */
 export type PluginIcon = {
@@ -5799,6 +5954,12 @@ export type PluginInfo = {
 	publisher: string | null,
 	/**  The version an update replaced, to roll back to. */
 	previousVersion: string | null,
+};
+
+/**  A line a view's `process` body printed. */
+export type PluginOutputLine = {
+	stderr: boolean,
+	text: string,
 };
 
 /**  A secret a plugin declares, and whether the user stored it. */
@@ -5865,6 +6026,29 @@ export type PluginsSnapshot = {
 	/**  UI contributions of live plugins, projected by the client. */
 	ui: UiContribution[],
 };
+
+/**  What a go-to-declaration in a POM found, and where. */
+export type PomGoto = {
+	/**
+	 *  Absolute path of the file with the declaration: the POM itself, or a parent
+	 *  POM of the local repository when the definition is inherited from one.
+	 */
+	path: string,
+	range: Range,
+	/**  What was found. */
+	kind: PomGotoKind,
+	/**  The declaration as named for the user (`example.version`, `com.example:example-lib`). */
+	label: string,
+};
+
+/**  The kind of declaration a POM go-to-declaration found. */
+export type PomGotoKind = 
+/**  A `<properties>` entry of the POM or one of its parents. */
+"property" | 
+/**  A `<dependencyManagement>` entry providing the dependency's version. */
+"managedDependency" | 
+/**  A `<pluginManagement>` entry providing the plugin's version. */
+"managedPlugin";
 
 /**  A 0-based line / UTF-16 column position. */
 export type Pos = {
@@ -6864,6 +7048,32 @@ export type ServerStatus = "starting" | "ready" | "busy" | "crashed" | "stopped"
  */
 "misconfigured";
 
+export type ServiceLog = {
+	program: string,
+	args: string[],
+	toggles: ServiceLogToggle[],
+};
+
+/**  A switch above the log; when on, `args` are appended and the program restarts. */
+export type ServiceLogToggle = {
+	id: string,
+	label: string,
+	args: string[],
+};
+
+export type ServicePane = { kind: "message"; value: string } | 
+/**  Read-only text that can be selected and copied. */
+{ kind: "text"; value: string } | 
+/**  A program the IDE runs (with the plugin's `process:` grant), followed in a log. */
+{ kind: "log"; value: ServiceLog };
+
+/**  A tab of the Services pane of a plugin's node (`service-provider.detail`). */
+export type ServiceTab = {
+	id: string,
+	label: string,
+	body: ServicePane,
+};
+
 /**  Exception filters of one session (see [`DebugManager::exception_filters`]). */
 export type SessionExceptionFilters = {
 	session: DebugSessionId,
@@ -7744,6 +7954,17 @@ export type VcsSettings = {
 	/**  Issue Navigation: commit-message patterns turned into links. */
 	issueNavigation?: IssueLink[],
 };
+
+/**  The tool that creates a new Python environment in "Add Python Interpreter". */
+export type VenvTool = 
+/**  `base -m venv <location>`. */
+"venv" | 
+/**  `uv venv <location> --python <base>` (uv must be on PATH). */
+"uv" | 
+/**  `poetry env use <base>` in the project, then `poetry env info --path`. */
+"poetry" | 
+/**  `conda create -p <location> -y` (conda must be on PATH). */
+"conda";
 
 /**  What a view or custom editor shows. */
 export type View = {
