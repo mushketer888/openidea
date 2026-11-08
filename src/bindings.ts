@@ -814,6 +814,14 @@ export const commands = {
 	jdkDownload: (vendor: string, version: number, location: string | null, request: RequestId, onEvent: Channel<InstallEvent>) => typedError<Sdk, IdeError>(__TAURI_INVOKE("jdk_download", { vendor, version, location, request, onEvent })),
 	/**  Installed interpreters / toolchains of `kind`; project-local ones first. */
 	sdkDetect: (kind: SdkKind) => typedError<Sdk[], IdeError>(__TAURI_INVOKE("sdk_detect", { kind })),
+	/**  Installed Arduino boards from the selected CLI and configuration, without hardware probing. */
+	sdkArduinoBoards: (near: string | null, request: RequestId) => typedError<ArduinoBoard[], IdeError>(__TAURI_INVOKE("sdk_arduino_boards", { near, request })),
+	/**  Effective Arduino CLI, active sketch and discovered sketches in the project. */
+	sdkArduinoContext: (near: string | null, request: RequestId) => typedError<ArduinoProjectContext, IdeError>(__TAURI_INVOKE("sdk_arduino_context", { near, request })),
+	/**  Connected upload/serial ports reported by `arduino-cli board list`. */
+	sdkArduinoPorts: (near: string | null, request: RequestId) => typedError<ArduinoPort[], IdeError>(__TAURI_INVOKE("sdk_arduino_ports", { near, request })),
+	/**  Prepares an argv-safe Arduino CLI command (`compile`, `compile --upload`, `monitor`). */
+	sdkArduinoPrepareCommand: (near: string | null, spec: ArduinoCommandSpec, request: RequestId) => typedError<ArduinoPreparedCommand, IdeError>(__TAURI_INVOKE("sdk_arduino_prepare_command", { near, spec, request })),
 	/**  The interpreter the project uses: the configured one, else its virtualenv. */
 	sdkPythonEffective: (near: string | null) => typedError<string | null, IdeError>(__TAURI_INVOKE("sdk_python_effective", { near })),
 	/**  The PHP interpreter chosen in Settings › Languages & Frameworks › PHP; `None`: the `php` on `PATH`. */
@@ -1861,6 +1869,70 @@ export type ApplyOutcome = {
 	applied: string[],
 	/**  Repository-relative paths left with conflicts (index stages for the merge UI). */
 	conflicts: string[],
+};
+
+export type ArduinoBoard = {
+	name: string,
+	fqbn: string,
+};
+
+export type ArduinoCommandKind = "build" | "upload" | "monitor";
+
+export type ArduinoCommandSpec = {
+	kind: ArduinoCommandKind,
+	sketch?: string | null,
+	fqbn?: string | null,
+	port?: string | null,
+	protocol?: string | null,
+	baud?: number | null,
+};
+
+export type ArduinoPort = {
+	address: string,
+	label: string,
+	protocol: string,
+	protocolLabel: string,
+	boards: ArduinoBoard[],
+};
+
+export type ArduinoPreparedCommand = {
+	program: IpcPath,
+	args: string[],
+	cwd: IpcPath,
+	sketch: IpcPath | null,
+	sketchName: string | null,
+	fqbn: string | null,
+	port: string | null,
+	protocol: string | null,
+	baud: number | null,
+};
+
+export type ArduinoProjectContext = {
+	projectRoot: IpcPath,
+	cli: IpcPath,
+	cliConfig: IpcPath | null,
+	activeSketch: ArduinoSketchTarget | null,
+	sketches: ArduinoSketchTarget[],
+};
+
+export type ArduinoSettings = {
+	/**  Empty tool paths discover PATH, then an installed Arduino IDE. */
+	cli?: string,
+	clangd?: string,
+	languageServer?: string,
+	/**  Empty uses the Arduino IDE's existing CLI configuration, when present. */
+	cliConfig?: string,
+	/**  Project board; empty requires a per-sketch override or sketch.yaml. */
+	fqbn?: string,
+	/**  Project-relative sketch folders, forward slashes, "." for the project root. */
+	sketchBoards?: { [key in string]: string },
+};
+
+export type ArduinoSketchTarget = {
+	sketch: IpcPath,
+	relative: string,
+	name: string,
+	fqbn: string | null,
 };
 
 /**  `groupId:artifactId` of a dependency. */
@@ -5070,6 +5142,7 @@ export type LanguagesSettings = {
 	java?: JavaSettings,
 	ruby?: RubySettings,
 	markdown?: MarkdownSettings,
+	arduino?: ArduinoSettings,
 };
 
 /**  What a freshly opened window should do once its frontend is up. */

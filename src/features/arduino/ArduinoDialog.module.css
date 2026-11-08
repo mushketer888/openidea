@@ -1,0 +1,120 @@
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 6px;
+  font-size: var(--fs-ui);
+  color: var(--fg);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 12px;
+  row-gap: 10px;
+  align-items: center;
+}
+
+.label {
+  color: var(--fg);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.label::after {
+  content: ":";
+}
+
+:lang(fr) .label::after {
+  content: "\00a0:";
+}
+
+.topLabel {
+  align-self: start;
+  padding-top: 5px;
+}
+
+.controlRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.select {
+  flex: 1;
+  min-width: 0;
+}
+
+.valueBox {
+  flex: 1;
+  min-width: 0;
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--bg-field);
+  border: 1px solid var(--border-button);
+  border-radius: var(--radius-control);
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.missingValue {
+  color: var(--fg-muted);
+  font-family: var(--font-ui);
+}
+
+.subtext {
+  grid-column: 2;
+  margin-top: -4px;
+  font-size: var(--fs-small);
+  line-height: 1.4;
+  color: var(--fg-subtle);
+}
+
+.errorText {
+  grid-column: 2;
+  margin-top: -4px;
+  font-size: var(--fs-small);
+  line-height: 1.4;
+  color: var(--danger);
+}
+
+.commandBox {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--bg-field);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font-family: var(--font-mono);
+  font-size: var(--fs-tiny);
+  line-height: 1.45;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 78px;
+  overflow: auto;
+}
+
+.placeholderBox {
+  padding: 5px 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-control);
+  font-size: var(--fs-small);
+  color: var(--fg-subtle);
+}
+
+.notice {
+  padding: 7px 10px;
+  border-radius: var(--radius-control);
+  background: var(--bg-feedback-info);
+  border: 1px solid var(--border-feedback-info);
+  font-size: var(--fs-small);
+  line-height: 1.4;
+  color: var(--fg);
+}

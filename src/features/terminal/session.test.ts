@@ -187,4 +187,40 @@ describe("terminal open", () => {
     session.dispose();
     container.remove();
   });
+
+  it("prevents Enter-to-restart on non-restartable hardware commands and reports exit code", async () => {
+    vi.useFakeTimers();
+    ipc.commands.termSpawn.mockResolvedValue({ id: 42, title: "arduino-cli" });
+    ipc.commands.termKill.mockResolvedValue(null);
+    const exits: Array<number | null> = [];
+    const session = new TerminalSession({
+      key: "s-upload",
+      cwd: "/sketch",
+      command: {
+        program: "/bin/arduino-cli",
+        args: ["compile", "--upload"],
+        keepOpenOnExit: true,
+        restartOnEnter: false,
+        transient: true,
+        onFinish: (code) => exits.push(code),
+      },
+      onChange: () => undefined,
+      onFocus: () => undefined,
+    });
+    const written: string[] = [];
+    vi.spyOn(session.term, "write").mockImplementation((data: string | Uint8Array) => {
+      written.push(String(data));
+    });
+    await session.start();
+    expect(ipc.commands.termSpawn).toHaveBeenCalledTimes(1);
+    session.exited(0);
+    vi.advanceTimersByTime(100);
+    expect(exits).toEqual([0]);
+    expect(written.join("")).toContain("[Process completed]");
+    expect(written.join("")).not.toContain("Press Enter to restart");
+    session.input("\r");
+    session.restart();
+    expect(ipc.commands.termSpawn).toHaveBeenCalledTimes(1);
+    session.dispose();
+  });
 });

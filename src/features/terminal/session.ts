@@ -70,7 +70,15 @@ export interface SessionOptions {
    * Run this program instead of the configured shell (e.g. `docker exec -it <id> sh`).
    * `shell`: it is a shell (a predefined session), so shell integration still applies.
    */
-  command?: { program: string; args: string[]; shell?: boolean };
+  command?: {
+    program: string;
+    args: string[];
+    shell?: boolean;
+    keepOpenOnExit?: boolean;
+    restartOnEnter?: boolean;
+    transient?: boolean;
+    onFinish?: (code: number | null) => void;
+  };
   /**
    * Restored tabs only: the project root, used when `cwd` no longer exists
    * (deleted since the last run, see `resolveStartCwd`).
@@ -571,8 +579,9 @@ export class TerminalSession {
     } catch (e) {
       this.pendingInput = "";
       this.term.writeln(`\x1b[31mFailed to start terminal: ${e instanceof Error ? e.message : String(e)}\x1b[0m`);
-      this.term.writeln(RESTART_HINT);
+      if (this.opts.command?.restartOnEnter !== false) this.term.writeln(RESTART_HINT);
       this.update({ status: "error" });
+      this.opts.command?.onFinish?.(null);
     }
   }
 
@@ -601,17 +610,20 @@ export class TerminalSession {
     if (this.disposed) return;
     this.ptyId = null;
     this.pendingInput = "";
-    this.update({ status: "exited", exitCode: code });
+    this.update({ status: "exited", exitCode: code, commandRunning: false });
     // Let output still in flight on the channel land first.
     setTimeout(() => {
       if (this.disposed || this.snapshot.status !== "exited") return;
       const suffix = code !== null && code !== 0 ? ` (exit code ${code})` : "";
-      this.term.write(`\r\n\x1b[2m[Process completed${suffix}]\x1b[0m\r\n${RESTART_HINT}\r\n`);
+      const hint = this.opts.command?.restartOnEnter === false ? "" : `${RESTART_HINT}\r\n`;
+      this.term.write(`\r\n\x1b[2m[Process completed${suffix}]\x1b[0m\r\n${hint}`);
+      this.opts.command?.onFinish?.(code);
       this.opts.onExit?.(this.key);
     }, 60);
   }
 
   restart() {
+    if (this.opts.command?.restartOnEnter === false) return;
     if (this.snapshot.status === "running" || this.snapshot.status === "starting") return;
     this.term.write("\r\n");
     this.pendingInput = "";
@@ -627,7 +639,7 @@ export class TerminalSession {
     if (!data) return;
     const status = this.snapshot.status;
     if (status === "exited" || status === "error") {
-      if (data === "\r") this.restart();
+      if (data === "\r" && this.opts.command?.restartOnEnter !== false) this.restart();
       return;
     }
     if (this.ptyId === null) {
@@ -729,9 +741,19 @@ export class TerminalSession {
     return () => this.searchListeners.delete(listener);
   }
 
+  async terminate(): Promise<void> {
+    const ptyId = this.ptyId;
+    this.ptyId = null;
+    if (ptyId !== null) {
+      await commands.termKill(ptyId).catch(() => undefined);
+    }
+    this.dispose();
+  }
+
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    const wasActive = this.snapshot.status === "starting" || this.snapshot.status === "running";
     this.fitter.cancel();
     this.ptyResize.cancel();
     this.pendingInput = "";
@@ -739,6 +761,7 @@ export class TerminalSession {
     this.host.removeEventListener("mousedown", this.onMiddleClick);
     if (this.ptyId !== null) void commands.termKill(this.ptyId);
     this.ptyId = null;
+    if (wasActive) this.opts.command?.onFinish?.(null);
     this.disposables.forEach((d) => d.dispose());
     this.term.dispose();
     this.host.remove();

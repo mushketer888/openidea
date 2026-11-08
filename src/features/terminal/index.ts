@@ -6,7 +6,14 @@ import { registerActions } from "@/platform/actions";
 import { onIdeEvent } from "@/platform/ipc";
 import { useProject } from "@/platform/project";
 import { onWorkflowSettingsChange } from "@/platform/workflowSettings";
-import { provideEmbeddedTerminal, registerToolWindow, toolWindowService } from "@/workbench/contributions";
+import {
+  provideEmbeddedTerminal,
+  provideTerminalCommandService,
+  registerToolWindow,
+  toolWindowService,
+  type TerminalCommandHandle,
+  type TerminalCommandOptions,
+} from "@/workbench/contributions";
 import { lazyComponent } from "@/ui";
 import { installTerminalKeys } from "./keys";
 import { loadTerminalRuntime, terminalRuntime } from "./loader";
@@ -50,6 +57,47 @@ async function split(arg: unknown, orientation: "horizontal" | "vertical", move 
   rt.splitTab(id, orientation, move);
   toolWindowService().show(WINDOW, true);
   focusActiveSoon();
+}
+
+async function runTerminalCommand(opts: TerminalCommandOptions): Promise<TerminalCommandHandle | null> {
+  if (!opts.program) return null;
+  const cwd = opts.cwd || projectRoot();
+  if (!cwd) return null;
+  const rt = await loadTerminalRuntime();
+  let finished = false;
+  const onFinish = (code: number | null) => {
+    if (finished) return;
+    finished = true;
+    opts.onExit?.(code);
+  };
+  const tab = rt.newTab(cwd, opts.name, {
+    program: opts.program,
+    args: opts.args,
+    keepOpenOnExit: opts.keepOpenOnExit,
+    restartOnEnter: opts.restartOnEnter,
+    transient: opts.transient,
+    onFinish,
+  });
+  if (opts.name) rt.renameTab(tab.id, opts.name);
+  toolWindowService().show(WINDOW, true);
+  focusActiveSoon();
+  return {
+    tabId: tab.id,
+    isRunning: () => {
+      const snap = rt.useTerminals.getState().sessions[tab.session];
+      return snap?.status === "starting" || snap?.status === "running";
+    },
+    focus: () => {
+      if (!rt.useTerminals.getState().tabs.some((t) => t.id === tab.id)) return;
+      rt.selectTab(tab.id);
+      toolWindowService().show(WINDOW, true);
+      focusActiveSoon();
+    },
+    stopAndClose: async () => {
+      await rt.closeTabAsync(tab.id);
+      onFinish(null);
+    },
+  };
 }
 
 export function activate(): () => void {
@@ -110,15 +158,28 @@ export function activate(): () => void {
         when: "projectOpen",
         hidden: true,
         run: async ({ arg }) => {
-          const a = arg as { program?: unknown; args?: unknown; name?: unknown; cwd?: unknown } | undefined;
+          const a = arg as
+            | {
+                program?: unknown;
+                args?: unknown;
+                name?: unknown;
+                cwd?: unknown;
+                keepOpenOnExit?: unknown;
+                restartOnEnter?: unknown;
+                transient?: unknown;
+              }
+            | undefined;
           if (!a || typeof a.program !== "string" || !a.program) return;
           const args = Array.isArray(a.args) ? a.args.filter((x): x is string => typeof x === "string") : [];
-          const cwd = (typeof a.cwd === "string" && a.cwd) || projectRoot();
-          if (!cwd) return;
-          const rt = await loadTerminalRuntime();
-          rt.newTab(cwd, typeof a.name === "string" && a.name ? a.name : undefined, { program: a.program, args });
-          toolWindowService().show(WINDOW, true);
-          focusActiveSoon();
+          await runTerminalCommand({
+            program: a.program,
+            args,
+            cwd: typeof a.cwd === "string" && a.cwd ? a.cwd : undefined,
+            name: typeof a.name === "string" && a.name ? a.name : undefined,
+            keepOpenOnExit: a.keepOpenOnExit === true,
+            restartOnEnter: typeof a.restartOnEnter === "boolean" ? a.restartOnEnter : undefined,
+            transient: a.transient === true,
+          });
         },
       },
       {
@@ -238,8 +299,11 @@ export function activate(): () => void {
   }
 
   provideEmbeddedTerminal(async (host, options) => (await loadTerminalRuntime()).createEmbeddedTerminal(host, options));
-  disposers.push(() => provideEmbeddedTerminal(undefined));
-
+  provideTerminalCommandService({ runCommand: runTerminalCommand });
+  disposers.push(() => {
+    provideEmbeddedTerminal(undefined);
+    provideTerminalCommandService(undefined);
+  });
   return () => {
     disposers.reverse().forEach((d) => d());
     terminalRuntime()?.unbindTerminals();

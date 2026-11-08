@@ -650,11 +650,38 @@ export type EmbeddedTerminalFactory = (
   options: EmbeddedTerminalOptions,
 ) => Promise<EmbeddedTerminal>;
 
+export interface TerminalCommandOptions {
+  program: string;
+  args: string[];
+  cwd?: string;
+  name?: string;
+  /** Keep the tab open after exit even when Settings › Terminal › Close session when it ends is enabled. */
+  keepOpenOnExit?: boolean;
+  /** Allow pressing Enter after exit to run the command again (default true; false for hardware uploads). */
+  restartOnEnter?: boolean;
+  /** Omit this tab from persisted project shell tabs. */
+  transient?: boolean;
+  /** Called once when the command finishes, fails to start or is closed. */
+  onExit?: (code: number | null) => void;
+}
+
+export interface TerminalCommandHandle {
+  tabId: string;
+  isRunning(): boolean;
+  focus(): void;
+  stopAndClose(): Promise<void>;
+}
+
+export interface TerminalCommandService {
+  runCommand(options: TerminalCommandOptions): Promise<TerminalCommandHandle | null>;
+}
+
 const services: {
   editor?: EditorService;
   toolWindows?: ToolWindowService;
   notifications?: NotificationService;
   embeddedTerminal?: EmbeddedTerminalFactory;
+  terminalCommands?: TerminalCommandService;
 } = {};
 
 function need<T>(s: T | undefined, name: string): T {
@@ -666,6 +693,8 @@ export const provideEditorService = (s: EditorService) => void (services.editor 
 export const provideToolWindowService = (s: ToolWindowService) => void (services.toolWindows = s);
 export const provideNotificationService = (s: NotificationService) => void (services.notifications = s);
 export const provideEmbeddedTerminal = (f: EmbeddedTerminalFactory | undefined) => void (services.embeddedTerminal = f);
+export const provideTerminalCommandService = (s: TerminalCommandService | undefined) =>
+  void (services.terminalCommands = s);
 
 export const editorService = (): EditorService => need(services.editor, "editor");
 export const toolWindowService = (): ToolWindowService => need(services.toolWindows, "toolWindows");
@@ -675,6 +704,7 @@ export const notifications = (): NotificationService =>
 export const maybeEditorService = (): EditorService | undefined => services.editor;
 /** Creates terminal widgets; provided by the terminal feature. */
 export const embeddedTerminal = (): EmbeddedTerminalFactory | undefined => services.embeddedTerminal;
+export const maybeTerminalCommandService = (): TerminalCommandService | undefined => services.terminalCommands;
 
 /**
  * The commit being prepared (the Commit tool window or dialog), for plugins:

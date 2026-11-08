@@ -34,6 +34,8 @@ export interface TerminalTab {
   session: string;
   /** The tab group showing it. */
   group: string;
+  /** Omitted from saved project tabs (one-shot build/upload/monitor commands). */
+  transient?: boolean;
 }
 
 interface TerminalState {
@@ -96,7 +98,7 @@ function createSession(cwd: string, command?: SessionOptions["command"], fallbac
     },
     onExit: (k) => {
       const tab = tabOfSession(k);
-      if (tab && workflowSettings().terminal.closeOnExit) closeTab(tab.id);
+      if (tab && !command?.keepOpenOnExit && workflowSettings().terminal.closeOnExit) closeTab(tab.id);
     },
   });
   sessions.set(key, session);
@@ -189,6 +191,7 @@ export function newTab(cwd: string, name?: string, command?: SessionOptions["com
     shell: command?.shell ? command.program : null,
     session: session.key,
     group: tabs.find((t) => t.id === activeTab)?.group ?? layoutGroups(layout)[0]!,
+    transient: command?.transient || undefined,
   };
   useTerminals.setState((s) => ({
     tabs: [...s.tabs, tab],
@@ -238,6 +241,15 @@ function withoutTab(s: Placement, id: string): Placement {
 export function closeTab(id: string) {
   const tab = useTerminals.getState().tabs.find((t) => t.id === id);
   if (!tab) return;
+  disposeSession(tab.session);
+  useTerminals.setState((s) => withoutTab(s, id));
+}
+
+export async function closeTabAsync(id: string): Promise<void> {
+  const tab = useTerminals.getState().tabs.find((t) => t.id === id);
+  if (!tab) return;
+  const session = sessions.get(tab.session);
+  if (session) await session.terminate();
   disposeSession(tab.session);
   useTerminals.setState((s) => withoutTab(s, id));
 }
@@ -522,6 +534,7 @@ function sessionCwd(key: string): string {
 function capture(): StoredTerminals {
   const s = useTerminals.getState();
   const tabs = s.tabs.flatMap((t) => {
+    if (t.transient) return [];
     const cwd = sessionCwd(t.session);
     return cwd ? [{ id: t.id, name: t.name, customName: t.customName, cwd, group: t.group, shell: t.shell }] : [];
   });

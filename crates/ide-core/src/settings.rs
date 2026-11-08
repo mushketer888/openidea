@@ -622,6 +622,7 @@ pub struct LanguagesSettings {
     pub java: JavaSettings,
     pub ruby: RubySettings,
     pub markdown: MarkdownSettings,
+    pub arduino: ArduinoSettings,
 }
 
 impl Default for LanguagesSettings {
@@ -642,8 +643,24 @@ impl Default for LanguagesSettings {
             java: JavaSettings::default(),
             ruby: RubySettings::default(),
             markdown: MarkdownSettings::default(),
+            arduino: ArduinoSettings::default(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ArduinoSettings {
+    /// Empty tool paths discover PATH, then an installed Arduino IDE.
+    pub cli: String,
+    pub clangd: String,
+    pub language_server: String,
+    /// Empty uses the Arduino IDE's existing CLI configuration, when present.
+    pub cli_config: String,
+    /// Project board; empty requires a per-sketch override or sketch.yaml.
+    pub fqbn: String,
+    /// Project-relative sketch folders, forward slashes, "." for the project root.
+    pub sketch_boards: BTreeMap<String, String>,
 }
 
 /// Languages & Frameworks › Markdown. Like IDEA's, it is application-level only.

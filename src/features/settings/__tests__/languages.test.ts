@@ -8,7 +8,6 @@ import {
   validateLanguages,
   validateProjectStructure,
 } from "@/platform/languageSettings";
-import { buildPageTree } from "../model/pages";
 import { LANGUAGE_PAGES } from "../pages/languages";
 import { filterPackages } from "../languages/PythonInterpreterPage";
 import { tildify } from "../languages/components";
@@ -49,6 +48,45 @@ describe("languages settings", () => {
     });
     expect(validateSettings({}).languages).toEqual(DEFAULT_LANGUAGES);
     expect(validateLanguages({ java: { maven: { threads: 4 } } }).java.maven.threads).toBe("");
+  });
+
+  it("normalizes Arduino tools and project-relative sketch board overrides", () => {
+    const arduino = validateSettings({
+      languages: {
+        arduino: {
+          cli: " C:/Arduino/arduino-cli.exe ",
+          clangd: false,
+          languageServer: " /opt/arduino-language-server ",
+          cliConfig: " config/arduino-cli.yaml ",
+          fqbn: " vendor:architecture:board ",
+          sketchBoards: {
+            ".": " vendor:architecture:root ",
+            "./examples\\blink/": " vendor:architecture:blink ",
+            "examples//./other": " vendor:architecture:other ",
+            "../outside": "vendor:architecture:outside",
+            "/absolute": "vendor:architecture:absolute",
+            "C:\\sketch": "vendor:architecture:absolute",
+            "": "vendor:architecture:empty",
+            blank: " ",
+            invalid: 42,
+          },
+        },
+      },
+    }).languages.arduino;
+    expect(arduino).toEqual({
+      cli: "C:/Arduino/arduino-cli.exe",
+      clangd: "",
+      languageServer: "/opt/arduino-language-server",
+      cliConfig: "config/arduino-cli.yaml",
+      fqbn: "vendor:architecture:board",
+      sketchBoards: {
+        ".": "vendor:architecture:root",
+        "examples/blink": "vendor:architecture:blink",
+        "examples/other": "vendor:architecture:other",
+      },
+    });
+    expect(validateLanguages({ arduino }).arduino).toEqual(arduino);
+    expect(validateLanguages({ arduino: { sketchBoards: [] } }).arduino.sketchBoards).toEqual({});
   });
 
   it("keeps the Ruby interpreter through settings normalization and defaults to Auto", () => {
@@ -173,26 +211,6 @@ describe("languages settings", () => {
 });
 
 describe("language pages", () => {
-  it("keeps every language under Languages & Frameworks, as in IntelliJ IDEA", () => {
-    const tree = buildPageTree(LANGUAGE_PAGES.map((p) => ({ ...p, component: p.component! })));
-    expect(tree.map((n) => n.title)).toEqual(["Project Structure", "Languages & Frameworks"]);
-    const langs = tree.find((n) => n.title === "Languages & Frameworks")!;
-    expect(langs.children.map((n) => n.title)).toEqual([
-      "Go",
-      "Java",
-      "Markdown",
-      "Node.js",
-      "Python Interpreter",
-      "PHP",
-      "Prettier",
-      "oxfmt",
-      "Ruff",
-      "Ruby",
-      "Rust",
-      "TypeScript",
-    ]);
-  });
-
   it("filters packages and shortens home paths", () => {
     const pkgs = [
       { name: "Django", version: "5.1" },

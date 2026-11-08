@@ -7,6 +7,7 @@
 //! never `lsp-types`, so the IPC surface stays stable.
 
 mod angular;
+mod arduino;
 mod caps;
 mod clang_tidy;
 mod convert;
@@ -192,7 +193,7 @@ pub struct LspManager {
     configuration_cache: Arc<Mutex<jdtls::configuration::ConfigurationCache>>,
     /// `window/showMessage` texts already surfaced; servers repeat them on every restart/reconfigure.
     shown_messages: Mutex<HashSet<(String, String)>>,
-    /// Virtual (non-`file:`) URIs a server returned, by the server that owns them.
+    /// Originating servers for virtual URIs and Arduino's external library sources.
     virtual_origins: Mutex<HashMap<String, ide_core::ServerId>>,
     /// Contents fetched for virtual URIs.
     virtual_docs: Mutex<HashMap<String, VirtualDocument>>,
@@ -408,7 +409,9 @@ impl LspManager {
 
     fn server_for(&self, cfg: &LanguageServerConfig, language: &LanguageId, path: &Path) -> Arc<Server> {
         let mut servers = self.servers.lock();
-        let root = launch::find_root(&self.project_root_for(path), path, &cfg.root_markers).unwrap_or_else(|| {
+        let project = self.project_root_for(path);
+        let sketch = (cfg.name == arduino::SERVER).then(|| arduino::sketch_root(&project, path)).flatten();
+        let root = sketch.or_else(|| launch::find_root(&project, path, &cfg.root_markers)).unwrap_or_else(|| {
             // Outside the project (library sources, …): reuse a running instance.
             servers
                 .iter()
@@ -430,6 +433,9 @@ impl LspManager {
     /// only while all servers listed before it are missing. One that requires a
     /// root marker serves only files below one, and stands in for no other.
     fn servers_for(&self, language: &LanguageId, path: &Path) -> Vec<Arc<Server>> {
+        if let Some(servers) = self.arduino_servers(language, path) {
+            return servers;
+        }
         let mut out = Vec::new();
         let mut available_before = false;
         for sc in &self.language_servers(language) {
@@ -815,6 +821,9 @@ impl LspManager {
             "capabilities": caps::client_capabilities(),
             "trace": "off",
         });
+        if server.name == arduino::SERVER {
+            arduino::configure_capabilities(&mut params["capabilities"]);
+        }
         if server.name == "gopls" {
             params["capabilities"]["experimental"]["interactiveResolve"] = json!({ "inputTypes": ["string"] });
         }
@@ -1416,6 +1425,7 @@ impl LspManager {
                     let locs = convert::goto_response(&self.conv(t.enc()), r);
                     let locs = library_sources(snap, pos, locs).await;
                     self.note_virtual(&t.server, locs.iter().map(|l| l.uri.as_deref()));
+                    self.note_arduino_sources(&t.server, &locs);
                     let locs = merge_locations(first, locs);
                     if !locs.is_empty() {
                         return Ok(locs);
@@ -2971,7 +2981,8 @@ impl LspManager {
                 .iter()
                 .filter(|a| {
                     !wanted.iter().any(|w| w.id == a.server.id)
-                        && configs.iter().any(|c| c.fallback && c.name == a.server.name)
+                        && (configs.iter().any(|c| c.fallback && c.name == a.server.name)
+                            || (a.server.name == "clangd" && wanted.iter().any(|s| s.name == arduino::SERVER)))
                 })
                 .map(|a| a.server.id)
                 .collect();

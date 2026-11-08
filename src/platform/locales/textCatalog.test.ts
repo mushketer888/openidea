@@ -124,6 +124,10 @@ const UNTRANSLATED = new Set<string>([
   // Products, tools and formats
   "Amazon Aurora MySQL",
   "Amazon Redshift",
+  "Arduino",
+  "Arduino CLI",
+  "Arduino Language Server",
+  "clangd",
   "basedpyright",
   "Cargo Check",
   "Clippy",

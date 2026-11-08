@@ -80,4 +80,15 @@ Database tool window notes, including Oracle Instant Client setup, are in
 [`docs/databases.md`](docs/databases.md).
 Java language server choices and their capabilities are in [`docs/java.md`](docs/java.md).
 
+Arduino sketches (`.ino`) have C++ syntax highlighting. For completion, signature help,
+hover and definition navigation, install Arduino IDE 2 and the board's core, then select
+the board in Settings › Languages & Frameworks › Arduino. On Windows, OpenIDEA can
+discover the IDE's Arduino CLI, clangd and Arduino Language Server; explicit paths are
+also supported. Installed libraries can remain outside the project: Arduino CLI resolves
+them using its configuration and the selected board. Per-sketch board overrides are
+available; Automatic reads `sketch.yaml` instead of guessing a board.
+Hover includes documentation provided by the headers, not additional Arduino Reference
+articles. Build › Build Sketch, Upload Sketch… and Serial Monitor… run `arduino-cli`
+directly in integrated terminal tabs using the configured board and explicit port selection.
+
 <sub>Not affiliated with JetBrains. IntelliJ IDEA is a trademark of JetBrains s.r.o.</sub>
