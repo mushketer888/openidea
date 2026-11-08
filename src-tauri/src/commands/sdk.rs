@@ -17,6 +17,55 @@ pub async fn sdk_detect(window: Window, state: State<'_, AppState>, kind: SdkKin
     ide_host::ops::sdk::sdk_detect(&state.host, window.label(), kind).await
 }
 
+/// Installed Arduino boards from the selected CLI and configuration, without hardware probing.
+#[tauri::command]
+#[specta::specta]
+pub async fn sdk_arduino_boards(
+    window: Window,
+    state: State<'_, AppState>,
+    near: Option<PathBuf>,
+    request: RequestId,
+) -> IdeResult<Vec<ide_sdk::arduino::ArduinoBoard>> {
+    ide_host::ops::sdk::sdk_arduino_boards(&state.host, window.label(), near, request).await
+}
+
+/// Effective Arduino CLI, active sketch and discovered sketches in the project.
+#[tauri::command]
+#[specta::specta]
+pub async fn sdk_arduino_context(
+    window: Window,
+    state: State<'_, AppState>,
+    near: Option<PathBuf>,
+    request: RequestId,
+) -> IdeResult<ide_sdk::arduino::ArduinoProjectContext> {
+    ide_host::ops::sdk::sdk_arduino_context(&state.host, window.label(), near, request).await
+}
+
+/// Connected upload/serial ports reported by `arduino-cli board list`.
+#[tauri::command]
+#[specta::specta]
+pub async fn sdk_arduino_ports(
+    window: Window,
+    state: State<'_, AppState>,
+    near: Option<PathBuf>,
+    request: RequestId,
+) -> IdeResult<Vec<ide_sdk::arduino::ArduinoPort>> {
+    ide_host::ops::sdk::sdk_arduino_ports(&state.host, window.label(), near, request).await
+}
+
+/// Prepares an argv-safe Arduino CLI command (`compile`, `compile --upload`, `monitor`).
+#[tauri::command]
+#[specta::specta]
+pub async fn sdk_arduino_prepare_command(
+    window: Window,
+    state: State<'_, AppState>,
+    near: Option<PathBuf>,
+    spec: ide_sdk::arduino::ArduinoCommandSpec,
+    request: RequestId,
+) -> IdeResult<ide_sdk::arduino::ArduinoPreparedCommand> {
+    ide_host::ops::sdk::sdk_arduino_prepare_command(&state.host, window.label(), near, spec, request).await
+}
+
 /// The interpreter the project uses: the configured one, else its virtualenv.
 #[tauri::command]
 #[specta::specta]

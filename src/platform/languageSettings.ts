@@ -130,6 +130,14 @@ export interface ArtifactConfigValid {
 }
 
 export interface LanguagesValid {
+  arduino: {
+    cli: string;
+    clangd: string;
+    languageServer: string;
+    cliConfig: string;
+    fqbn: string;
+    sketchBoards: Record<string, string>;
+  };
   python: { interpreter: string; activateVirtualenv: boolean };
   ruby: { interpreter: string };
   node: { interpreter: string; packageManager: "" | "npm" | "pnpm" | "yarn" | "bun" };
@@ -225,6 +233,7 @@ export type FolderListKey =
   | "unmarked";
 
 export const DEFAULT_LANGUAGES: LanguagesValid = {
+  arduino: { cli: "", clangd: "", languageServer: "", cliConfig: "", fqbn: "", sketchBoards: {} },
   python: { interpreter: "", activateVirtualenv: true },
   ruby: { interpreter: "" },
   node: { interpreter: "", packageManager: "" },
@@ -290,6 +299,15 @@ export function normalizeFolder(path: string): string {
     .replace(/^\/+|\/+$/g, "");
 }
 
+/** Arduino sketch folders are project-relative; `.` denotes the project root. */
+export function normalizeArduinoSketchFolder(path: string): string | null {
+  const relative = path.replace(/\\/g, "/").trim();
+  if (!relative || relative.startsWith("/") || /^[a-z]:/i.test(relative)) return null;
+  const parts = relative.split("/");
+  if (parts.includes("..")) return null;
+  return parts.filter((part) => part && part !== ".").join("/") || ".";
+}
+
 /** A stored preview font size within IDEA's 8..72, or `null` (follow the editor font). */
 const previewSize = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? Math.min(72, Math.max(8, Math.round(v))) : null;
@@ -330,6 +348,7 @@ function validateFormatter(raw: unknown, d = DEFAULT_FORMATTER): ExternalFormatt
 export function validateLanguages(raw: unknown): LanguagesValid {
   const d = DEFAULT_LANGUAGES;
   const l = obj(raw);
+  const arduino = obj(l.arduino);
   const py = obj(l.python);
   const ruby = obj(l.ruby);
   const node = obj(l.node);
@@ -344,6 +363,20 @@ export function validateLanguages(raw: unknown): LanguagesValid {
   const gradle = obj(java.gradle);
   const markdown = obj(l.markdown);
   return {
+    arduino: {
+      cli: text(arduino.cli, d.arduino.cli),
+      clangd: text(arduino.clangd, d.arduino.clangd),
+      languageServer: text(arduino.languageServer, d.arduino.languageServer),
+      cliConfig: text(arduino.cliConfig, d.arduino.cliConfig),
+      fqbn: text(arduino.fqbn, d.arduino.fqbn),
+      sketchBoards: Object.fromEntries(
+        Object.entries(obj(arduino.sketchBoards)).flatMap(([path, value]) => {
+          const folder = normalizeArduinoSketchFolder(path);
+          const fqbn = text(value, "");
+          return folder !== null && fqbn ? [[folder, fqbn]] : [];
+        }),
+      ),
+    },
     python: {
       interpreter: text(py.interpreter, d.python.interpreter),
       activateVirtualenv: bool(py.activateVirtualenv, d.python.activateVirtualenv),

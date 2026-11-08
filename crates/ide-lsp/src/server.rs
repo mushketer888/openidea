@@ -368,6 +368,7 @@ impl Server {
             message.push_str(":\n");
             message.push_str(&tail);
         }
+        tracing::warn!("{message}");
         let delay = self.record_crash();
         message.push_str(if delay.is_some() {
             "\nRestarting…"

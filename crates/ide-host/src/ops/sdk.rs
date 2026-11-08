@@ -72,6 +72,122 @@ pub fn sdk_python_effective(host: &Host, window: &str, near: Option<PathBuf>) ->
     Ok(ide_sdk::apply::python_interpreter_near(&root, near.as_deref(), &settings).map(Into::into))
 }
 
+fn arduino_member_settings(
+    root: PathBuf,
+    settings: ide_core::settings::Settings,
+    config_dir: &std::path::Path,
+    near: Option<&std::path::Path>,
+) -> IdeResult<(PathBuf, ide_core::settings::Settings)> {
+    let member = ide_workspace::workspace::Workspace::load(&root)?.and_then(|w| {
+        let near = near?;
+        w.projects.into_iter().filter(|p| near.starts_with(p)).max_by_key(|p| p.components().count())
+    });
+    Ok(match member {
+        Some(root) => {
+            let settings = ide_workspace::SettingsStore::load(config_dir, Some(&root)).effective();
+            (root, settings)
+        }
+        None => (root, settings),
+    })
+}
+
+/// Boards provided by installed Arduino cores; no hardware probing or package installation.
+pub async fn sdk_arduino_boards(
+    host: &Host,
+    window: &str,
+    near: Option<PathBuf>,
+    request: RequestId,
+) -> IdeResult<Vec<ide_sdk::arduino::ArduinoBoard>> {
+    host.require_trust(window)?;
+    let project = host.project(window)?;
+    let root = project.root.clone();
+    let settings = project.settings.effective();
+    let config_dir = host.config_dir.clone();
+    let cancel = host.begin_project_request(window, request);
+    let result = tokio::task::spawn_blocking(move || {
+        let (root, settings) = arduino_member_settings(root, settings, &config_dir, near.as_deref())?;
+        ide_sdk::arduino::installed_boards(&root, &settings, &cancel)
+    })
+    .await
+    .map_err(join_err);
+    host.end_request(request);
+    result?
+}
+
+/// Effective Arduino CLI, active sketch and candidate sketches in the project.
+pub async fn sdk_arduino_context(
+    host: &Host,
+    window: &str,
+    near: Option<PathBuf>,
+    request: RequestId,
+) -> IdeResult<ide_sdk::arduino::ArduinoProjectContext> {
+    host.require_trust(window)?;
+    let project = host.project(window)?;
+    let root = project.root.clone();
+    let settings = project.settings.effective();
+    let config_dir = host.config_dir.clone();
+    let cancel = host.begin_project_request(window, request);
+    let result = tokio::task::spawn_blocking(move || {
+        let (root, settings) = arduino_member_settings(root, settings, &config_dir, near.as_deref())?;
+        ide_sdk::arduino::project_context(&root, near.as_deref(), &settings, &cancel)
+    })
+    .await
+    .map_err(join_err);
+    host.end_request(request);
+    result?
+}
+
+/// Connected Arduino upload/serial ports reported by `arduino-cli board list`.
+pub async fn sdk_arduino_ports(
+    host: &Host,
+    window: &str,
+    near: Option<PathBuf>,
+    request: RequestId,
+) -> IdeResult<Vec<ide_sdk::arduino::ArduinoPort>> {
+    host.require_trust(window)?;
+    let project = host.project(window)?;
+    let root = project.root.clone();
+    let settings = project.settings.effective();
+    let config_dir = host.config_dir.clone();
+    let cancel = host.begin_project_request(window, request);
+    let result = tokio::task::spawn_blocking(move || {
+        let (root, settings) = arduino_member_settings(root, settings, &config_dir, near.as_deref())?;
+        ide_sdk::arduino::connected_ports(&root, &settings, &cancel)
+    })
+    .await
+    .map_err(join_err);
+    host.end_request(request);
+    result?
+}
+
+/// Prepares an argv-safe Arduino CLI command (`compile`, `compile --upload`, `monitor`).
+pub async fn sdk_arduino_prepare_command(
+    host: &Host,
+    window: &str,
+    near: Option<PathBuf>,
+    spec: ide_sdk::arduino::ArduinoCommandSpec,
+    request: RequestId,
+) -> IdeResult<ide_sdk::arduino::ArduinoPreparedCommand> {
+    host.require_trust(window)?;
+    let project = host.project(window)?;
+    let root = project.root.clone();
+    let settings = project.settings.effective();
+    let config_dir = host.config_dir.clone();
+    let cancel = host.begin_project_request(window, request);
+    let result = tokio::task::spawn_blocking(move || {
+        if cancel.is_cancelled() {
+            return Err(IdeError::cancelled());
+        }
+        let probe = near.as_deref().or(spec.sketch.as_deref());
+        let (root, settings) = arduino_member_settings(root, settings, &config_dir, probe)?;
+        ide_sdk::arduino::prepare_command(&root, &settings, &spec)
+    })
+    .await
+    .map_err(join_err);
+    host.end_request(request);
+    result?
+}
+
 /// The PHP interpreter chosen in Settings › Languages & Frameworks › PHP; `None`: the `php` on `PATH`.
 pub fn sdk_php_effective(host: &Host, window: &str) -> IdeResult<Option<ide_core::IpcPath>> {
     host.require_trust(window)?;
@@ -308,6 +424,18 @@ pub(crate) fn register(d: &mut Dispatcher) {
         |c| async move { sdk_python_interpreter(&c.host, &c.window, c.arg("path")?).await },
     );
     d.add("sdk_python_effective", |c| async move { sdk_python_effective(&c.host, &c.window, c.arg("near")?) });
+    d.add("sdk_arduino_boards", |c| async move {
+        sdk_arduino_boards(&c.host, &c.window, c.arg("near")?, c.arg("request")?).await
+    });
+    d.add("sdk_arduino_context", |c| async move {
+        sdk_arduino_context(&c.host, &c.window, c.arg("near")?, c.arg("request")?).await
+    });
+    d.add("sdk_arduino_ports", |c| async move {
+        sdk_arduino_ports(&c.host, &c.window, c.arg("near")?, c.arg("request")?).await
+    });
+    d.add("sdk_arduino_prepare_command", |c| async move {
+        sdk_arduino_prepare_command(&c.host, &c.window, c.arg("near")?, c.arg("spec")?, c.arg("request")?).await
+    });
     d.add("sdk_php_effective", |c| async move { sdk_php_effective(&c.host, &c.window) });
     d.add("sdk_php_xdebug", |c| async move { sdk_php_xdebug(&c.host, &c.window, c.arg("php")?, c.arg("cwd")?).await });
     d.add(

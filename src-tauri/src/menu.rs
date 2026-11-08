@@ -567,6 +567,10 @@ pub fn spec(os: Os) -> Vec<Entry> {
             act("build.rebuildProject", "Rebuild Project"),
             SEP,
             act("build.buildArtifacts", "Build Artifacts"),
+            SEP,
+            act("arduino.buildSketch", "Build Sketch"),
+            act("arduino.uploadSketch", "Upload Sketch…"),
+            act("arduino.serialMonitor", "Serial Monitor…"),
         ],
     ));
 

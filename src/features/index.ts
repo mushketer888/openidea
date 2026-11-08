@@ -30,6 +30,7 @@ import { activate as profiler } from "./profiler";
 import { activate as logcat } from "./logcat";
 import { activate as buildTools } from "./build-tools";
 import { activate as build } from "./build";
+import { activate as arduino } from "./arduino";
 import { activate as templates, activateSettingsPages as templatesPages } from "./templates";
 import { activate as todo, activateSettingsPages as todoPages } from "./todo";
 import { activate as settings, activateRuntimeSettings, activateSettingsWindow } from "./settings";
@@ -79,6 +80,7 @@ const features: Array<[string, Activate]> = [
   ["logcat", logcat],
   ["build-tools", buildTools],
   ["build", build],
+  ["arduino", arduino],
   ["templates", templates],
   ["todo", todo],
   ["settings", settings],

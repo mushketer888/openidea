@@ -4,6 +4,7 @@
  * `../languages/`; settings are `languages.*` / `projectStructure.*`.
  */
 import { GoPage, JavaPage, NodePage, PhpPage, RubyPage, RustPage, TypeScriptPage } from "../languages/LanguagePages";
+import { ArduinoPage } from "../languages/ArduinoPage";
 import { MarkdownPage } from "../languages/MarkdownPage";
 import { OxfmtPage, PrettierPage, RuffPage } from "../languages/FormatterPage";
 import { ProjectStructurePage } from "../languages/ProjectStructurePage";
@@ -15,6 +16,16 @@ import type { PageSpec } from "./spec";
 export const LANGUAGES_GROUP = "Languages & Frameworks";
 
 export const LANGUAGE_PAGES: PageSpec[] = [
+  {
+    id: "languages.arduino",
+    projectScope: true,
+    defaultScope: "project",
+    title: "Arduino",
+    group: LANGUAGES_GROUP,
+    order: 389,
+    keywords: ["arduino", "ino", "board", "fqbn", "sketch", "sketch.yaml", "arduino-cli", "clangd", "language server"],
+    component: ArduinoPage,
+  },
   {
     id: "python.interpreter",
     projectScope: true,
